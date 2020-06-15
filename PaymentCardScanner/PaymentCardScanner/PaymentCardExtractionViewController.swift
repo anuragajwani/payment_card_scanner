@@ -8,8 +8,12 @@
 
 import UIKit
 import AVFoundation
+import Vision
 
 class PaymentCardExtractionViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDelegate {
+    
+    private let requestHandler = VNSequenceRequestHandler()
+    private var rectangleDrawing: CAShapeLayer?
     
     private let captureSession = AVCaptureSession()
     private lazy var previewLayer: AVCaptureVideoPreviewLayer = {
@@ -58,7 +62,13 @@ class PaymentCardExtractionViewController: UIViewController, AVCaptureVideoDataO
             debugPrint("unable to get image from sample buffer")
             return
         }
-        // TODO process image here
+        DispatchQueue.main.async {
+            self.rectangleDrawing?.removeFromSuperlayer()
+            if let paymentCardRectangle = self.detectPaymentCard(frame: frame) {
+                self.rectangleDrawing = self.createRectangleDrawing(paymentCardRectangle)
+                self.view.layer.addSublayer(self.rectangleDrawing!)
+            }
+        }
     }
     
     // MARK: - Camera setup
@@ -86,5 +96,39 @@ class PaymentCardExtractionViewController: UIViewController, AVCaptureVideoDataO
         guard let connection = self.videoOutput.connection(with: AVMediaType.video),
             connection.isVideoOrientationSupported else { return }
         connection.videoOrientation = .portrait
+    }
+    
+    private func detectPaymentCard(frame: CVImageBuffer) -> VNRectangleObservation? {
+        let rectangleDetectionRequest = VNDetectRectanglesRequest()
+        let paymentCardAspectRatio: Float = 85.60/53.98
+        rectangleDetectionRequest.minimumAspectRatio = paymentCardAspectRatio * 0.95
+        rectangleDetectionRequest.maximumAspectRatio = paymentCardAspectRatio * 1.10
+        
+        let textDetectionRequest = VNDetectTextRectanglesRequest()
+        
+        try? self.requestHandler.perform([rectangleDetectionRequest, textDetectionRequest], on: frame)
+        
+        guard let rectangle = (rectangleDetectionRequest.results as? [VNRectangleObservation])?.first,
+            let text = (textDetectionRequest.results as? [VNTextObservation])?.first,
+            rectangle.boundingBox.contains(text.boundingBox) else {
+                // no credit card rectangle detected
+                return nil
+        }
+        
+        return rectangle
+    }
+    
+    private func createRectangleDrawing(_ rectangleObservation: VNRectangleObservation) -> CAShapeLayer {
+        let transform = CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: 0, y: -self.previewLayer.frame.height)
+        let scale = CGAffineTransform.identity.scaledBy(x: self.previewLayer.frame.width, y: self.previewLayer.frame.height)
+        let rectangleOnScreen = rectangleObservation.boundingBox.applying(scale).applying(transform)
+        let boundingBoxPath = CGPath(rect: rectangleOnScreen, transform: nil)
+        let shapeLayer = CAShapeLayer()
+        shapeLayer.path = boundingBoxPath
+        shapeLayer.fillColor = UIColor.clear.cgColor
+        shapeLayer.strokeColor = UIColor.green.cgColor
+        shapeLayer.lineWidth = 5
+        shapeLayer.borderWidth = 5
+        return shapeLayer
     }
 }
