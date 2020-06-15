@@ -14,6 +14,7 @@ class PaymentCardExtractionViewController: UIViewController, AVCaptureVideoDataO
     
     private let requestHandler = VNSequenceRequestHandler()
     private var rectangleDrawing: CAShapeLayer?
+    private var paymentCardRectangleObservation: VNRectangleObservation?
     
     private let captureSession = AVCaptureSession()
     private lazy var previewLayer: AVCaptureVideoPreviewLayer = {
@@ -63,11 +64,12 @@ class PaymentCardExtractionViewController: UIViewController, AVCaptureVideoDataO
             return
         }
         DispatchQueue.main.async {
-            self.rectangleDrawing?.removeFromSuperlayer()
-            if let paymentCardRectangle = self.detectPaymentCard(frame: frame) {
-                self.rectangleDrawing = self.createRectangleDrawing(paymentCardRectangle)
-                self.view.layer.addSublayer(self.rectangleDrawing!)
-            }
+            self.rectangleDrawing?.removeFromSuperlayer() // removes old rectangle drawings
+        }
+        if let paymentCardRectangleObservation = self.paymentCardRectangleObservation {
+            self.handleObservedPaymentCard(paymentCardRectangleObservation, in: frame)
+        } else if let paymentCardRectangleObservation = self.detectPaymentCard(frame: frame) {
+            self.paymentCardRectangleObservation = paymentCardRectangleObservation
         }
     }
     
@@ -130,5 +132,29 @@ class PaymentCardExtractionViewController: UIViewController, AVCaptureVideoDataO
         shapeLayer.lineWidth = 5
         shapeLayer.borderWidth = 5
         return shapeLayer
+    }
+    
+    private func trackPaymentCard(for observation: VNRectangleObservation, in frame: CVImageBuffer) -> VNRectangleObservation? {
+        
+        let request = VNTrackRectangleRequest(rectangleObservation: observation)
+        request.trackingLevel = .fast
+        
+        try? self.requestHandler.perform([request], on: frame)
+        
+        guard let trackedRectangle = (request.results as? [VNRectangleObservation])?.first else {
+            return nil
+        }
+        return trackedRectangle
+    }
+    
+    private func handleObservedPaymentCard(_ observation: VNRectangleObservation, in frame: CVImageBuffer) {
+        if let trackedPaymentCardRectangle = self.trackPaymentCard(for: observation, in: frame) {
+            DispatchQueue.main.async {
+                self.rectangleDrawing = self.createRectangleDrawing(trackedPaymentCardRectangle)
+                self.view.layer.addSublayer(self.rectangleDrawing!)
+            }
+        } else {
+            self.paymentCardRectangleObservation = nil
+        }
     }
 }
