@@ -150,11 +150,74 @@ class PaymentCardExtractionViewController: UIViewController, AVCaptureVideoDataO
     private func handleObservedPaymentCard(_ observation: VNRectangleObservation, in frame: CVImageBuffer) {
         if let trackedPaymentCardRectangle = self.trackPaymentCard(for: observation, in: frame) {
             DispatchQueue.main.async {
-                self.rectangleDrawing = self.createRectangleDrawing(trackedPaymentCardRectangle)
+               self.rectangleDrawing?.removeFromSuperlayer()
+               self.rectangleDrawing = self.createRectangleDrawing(trackedPaymentCardRectangle)
                 self.view.layer.addSublayer(self.rectangleDrawing!)
+            }
+            DispatchQueue.global(qos: .userInitiated).async {
+                if let extractedNumber = self.extractPaymentCardNumber(frame: frame, rectangle: observation) {
+                    DispatchQueue.main.async {
+                        self.resultsHandler(extractedNumber)
+                    }
+                }
             }
         } else {
             self.paymentCardRectangleObservation = nil
         }
+    }
+    
+    private func extractPaymentCardNumber(frame: CVImageBuffer, rectangle: VNRectangleObservation) -> String? {
+        
+        let cardPositionInImage = VNImageRectForNormalizedRect(rectangle.boundingBox, CVPixelBufferGetWidth(frame), CVPixelBufferGetHeight(frame))
+        let ciImage = CIImage(cvImageBuffer: frame)
+        let croppedImage = ciImage.cropped(to: cardPositionInImage)
+        
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = false
+        
+        let stillImageRequestHandler = VNImageRequestHandler(ciImage: croppedImage, options: [:])
+        try? stillImageRequestHandler.perform([request])
+        
+        guard let texts = request.results as? [VNRecognizedTextObservation], texts.count > 0 else {
+            // no text detected
+            return nil
+        }
+        
+        let digitsRecognized = texts
+            .flatMap({ $0.topCandidates(10).map({ $0.string }) })
+            .map({ $0.trimmingCharacters(in: .whitespaces) })
+            .filter({ CharacterSet.decimalDigits.isSuperset(of: CharacterSet(charactersIn: $0)) })
+        let _16digits = digitsRecognized.first(where: { $0.count == 16 })
+        let has16Digits = _16digits != nil
+        let _4digits = digitsRecognized.filter({ $0.count == 4 })
+        let has4sections4digits = _4digits.count == 4
+        
+        let digits = _16digits ?? _4digits.joined()
+        let digitsIsValid = (has16Digits || has4sections4digits) && self.checkDigits(digits)
+        return digitsIsValid ? digits : nil
+    }
+    
+    private func checkDigits(_ digits: String) -> Bool {
+        guard digits.count == 16, CharacterSet.decimalDigits.isSuperset(of: CharacterSet(charactersIn: digits)) else {
+            return false
+        }
+        var digits = digits
+        let checksum = digits.removeLast()
+        let sum = digits.reversed()
+            .enumerated()
+            .map({ (index, element) -> Int in
+                if (index % 2) == 0 {
+                   let doubled = Int(String(element))!*2
+                   return doubled > 9
+                       ? Int(String(String(doubled).first!))! + Int(String(String(doubled).last!))!
+                       : doubled
+                } else {
+                    return Int(String(element))!
+                }
+            })
+            .reduce(0, { (res, next) in res + next })
+        let checkDigitCalc = (sum * 9) % 10
+        return Int(String(checksum))! == checkDigitCalc
     }
 }
